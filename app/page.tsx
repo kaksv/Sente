@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useState } from "react";
+import { Fragment, useCallback, useRef, useState } from "react";
 import { SAMPLE_SMS } from "@/lib/samples";
 import { parseSms } from "@/lib/parse";
 import { analyse, money } from "@/lib/detect";
@@ -11,11 +11,41 @@ type AiState = "idle" | "loading" | "on" | "off";
 const kindLabel = (k: Row["kind"]) =>
   k === "receive" ? "Received" : k === "send" ? "Sent" : "Withdrawal";
 
+/** Resize screenshots in the browser before sending them for OCR. */
+async function downscale(file: File): Promise<string> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("decode failed"));
+      i.src = url;
+    });
+    const MAX = 1200;
+    const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+    const w = Math.max(1, Math.round(img.width * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("no canvas");
+    ctx.drawImage(img, 0, 0, w, h);
+    return canvas.toDataURL("image/jpeg", 0.82);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export default function Page() {
   const [raw, setRaw] = useState("");
   const [rows, setRows] = useState<Row[] | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [ai, setAi] = useState<AiState>("idle");
+  const [extracting, setExtracting] = useState(false);
+  const [uploadNote, setUploadNote] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const run = useCallback(async (text: string) => {
     const txs = parseSms(text);
@@ -68,8 +98,53 @@ export default function Page() {
     }
   }, []);
 
+  const handleImage = useCallback(
+    async (file: File) => {
+      if (extracting) return;
+      if (!file.type.startsWith("image/")) {
+        setUploadNote("That file isn't an image.");
+        return;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        setUploadNote("That image is over 10 MB. Choose a smaller image or paste the text.");
+        return;
+      }
+      setExtracting(true);
+      setUploadNote("Reading screenshot…");
+      try {
+        const image = await downscale(file);
+        const res = await fetch("/api/extract", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image }),
+        });
+        const data = await res.json();
+        if (data?.ok && data.text) {
+          const merged = raw.trim() ? raw.trim() + "\n" + data.text : data.text;
+          setRaw(merged);
+          setUploadNote(null);
+          run(merged);
+        } else {
+          setUploadNote(
+            data?.reason === "no-key"
+              ? "Screenshot reading is off — no model key configured. Paste the text instead."
+              : "Couldn't read that image. Try a sharper crop, or paste the text."
+          );
+        }
+      } catch {
+        setUploadNote(
+          "Couldn't read that image. Try a sharper crop, or paste the text."
+        );
+      } finally {
+        setExtracting(false);
+      }
+    },
+    [extracting, raw, run]
+  );
+
   const loadSample = () => {
     setRaw(SAMPLE_SMS);
+    setUploadNote(null);
     run(SAMPLE_SMS);
   };
 
@@ -78,6 +153,7 @@ export default function Page() {
     setRows(null);
     setSummary(null);
     setAi("idle");
+    setUploadNote(null);
   };
 
   const reconciled =
@@ -103,28 +179,77 @@ export default function Page() {
         <span className="badge">AI for Local Impact</span>
       </header>
 
-      <section className="composer">
+      <section
+        className={`composer ${dragging ? "drag" : ""}`}
+        aria-busy={extracting}
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (!extracting) setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          if (extracting) return;
+          const f = e.dataTransfer.files?.[0];
+          if (f) handleImage(f);
+        }}
+      >
+        <label className="composer-label" htmlFor="sms-input">
+          Paste or edit mobile-money messages
+        </label>
         <textarea
+          id="sms-input"
           value={raw}
           onChange={(e) => setRaw(e.target.value)}
+          disabled={extracting}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") run(raw);
           }}
           spellCheck={false}
           placeholder={`Paste mobile-money SMS here — one message per line.\n\n09:02 You have received UGX 50,000 from JOHN MUKASA 256772001122. Financial Transaction Id: 412300001. Your new balance is UGX 900,000.`}
         />
+
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) handleImage(f);
+            e.target.value = "";
+          }}
+        />
+
         <div className="actions">
-          <button className="btn btn-primary" onClick={loadSample}>
+          <button className="btn btn-primary" onClick={loadSample} disabled={extracting}>
             Try sample
           </button>
-          <button className="btn" onClick={() => run(raw)}>
+          <button
+            className="btn"
+            onClick={() => fileRef.current?.click()}
+            disabled={extracting}
+          >
+            {extracting ? "Reading…" : "Upload screenshot"}
+          </button>
+          <button className="btn" onClick={() => run(raw)} disabled={extracting}>
             Analyse
           </button>
-          <button className="btn btn-ghost" onClick={clear}>
+          <button className="btn btn-ghost" onClick={clear} disabled={extracting}>
             Clear
           </button>
-          <span className="hint">⌘↵ to analyse · nothing leaves this device</span>
+          <span className="hint">
+            drop a screenshot anywhere · ⌘↵ to analyse
+          </span>
         </div>
+
+        <p className="privacy-note">
+          Fraud checks run here. With a model key configured, flagged SMS text
+          is sent for explanations; uploaded screenshots are sent to the
+          configured provider for OCR. Sente does not save them to an app database.
+        </p>
+        {uploadNote && <p className="note" role="status" aria-live="polite">{uploadNote}</p>}
       </section>
 
       {summary && (
@@ -158,9 +283,7 @@ export default function Page() {
                 {summary.fakeCount === 1 ? "payment is" : "payments are"} fake ·{" "}
                 <span className="num">{money(summary.atRisk)}</span> at risk
               </span>
-              <span className="sub">
-                excluded from the totals above
-              </span>
+              <span className="sub">excluded from the totals above</span>
             </div>
           ) : (
             <div className="ok-banner">
@@ -251,7 +374,7 @@ export default function Page() {
       )}
 
       <footer className="footer">
-        <span>Runs locally · no accounts · no storage</span>
+        <span>No accounts · no Sente database</span>
         <span>Balance-chain · replayed IDs · fee arithmetic · template drift</span>
         <span>Risk score, not proof</span>
       </footer>

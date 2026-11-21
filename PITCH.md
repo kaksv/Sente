@@ -69,7 +69,10 @@ get roughly the same.
 > The language model does what rules can't: it reads messy forwarded text, and it
 > catches the forgeries that are *almost* the right template.
 >
-> And it runs entirely in the browser with no server state — so it works on a
+> And it reads screenshots too — drop one on the page and it goes through the
+> exact same checks. The model is only the eyes. It never decides.
+>
+> It runs entirely in the browser with no server state — so it works on a
 > shopkeeper's phone with no install."
 
 ### 1:50–2:00 — Close
@@ -96,12 +99,17 @@ get roughly the same.
 > explains it in a sentence a shopkeeper understands.
 
 **"What about screenshots?"**
-> Same engine, different input. Vision model extracts the text, then the identical
-> detection pipeline runs. It's on the roadmap, not in this build.
+> Built. Drop a screenshot on the page and it goes through the same pipeline.
+> The model is used strictly as OCR — it never decides anything. And the OCR
+> prompt explicitly forbids correcting spelling, because "recieved" is one of
+> our fraud signals. A model that tidied the text would destroy the evidence.
 
 **"Privacy — people's transaction data?"**
-> Nothing leaves the device except the text the user explicitly pastes, and the
-> parser path is fully local. No accounts, no storage, no database.
+> The fraud checks run in the browser, and Sente has no accounts or database.
+> Without a model key, messages stay on the device. If one is configured, flagged
+> SMS text is sent to that provider for explanations, and an uploaded, downscaled
+> screenshot is sent for OCR. Sente doesn't save them to an app database;
+> provider data handling depends on its terms.
 
 **"Would a shop actually use this?"**
 > They already do the reconciliation by hand, every evening, in a paper book.

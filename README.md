@@ -55,10 +55,11 @@ separately.
 ## Architecture
 
 ```
-lib/parse.ts    SMS → structured transactions (regex, runs on-device)
-lib/detect.ts   the fraud signals + balance-chain walk (pure functions)
-app/page.tsx    the whole UI, one screen
-app/api/analyze OPTIONAL model layer: rewrites reasons into plain English
+lib/parse.ts     SMS → structured transactions (regex, runs on-device)
+lib/detect.ts    the fraud signals + balance-chain walk (pure functions)
+app/page.tsx     the whole UI, one screen
+app/api/analyze  OPTIONAL model layer: rewrites reasons into plain English
+app/api/extract  OPTIONAL vision layer: screenshot → text (OCR only)
 ```
 
 The detection core is **deterministic and local**. The language model is a
@@ -69,6 +70,29 @@ If there is no API key, the model is slow, or the network dies — **the app sti
 works**. The flags, the totals and the reasoning are all computed on-device.
 The demo cannot fail because of an API.
 
+## Screenshot upload
+
+Drop a phone screenshot anywhere on the page and it is transcribed, then fed
+through the **identical** detection pipeline as pasted text.
+
+The vision model is used strictly as an OCR layer — it never makes a fraud
+judgement. That separation is deliberate: if vision is unavailable, the app
+degrades to "paste the text" instead of breaking.
+
+One detail that matters: the OCR prompt **explicitly forbids correcting
+spelling**. A typo like "recieved" is one of the fraud signals, so a model that
+tidies the text would silently destroy evidence. The prompt also forbids
+normalising currency formatting, for the same reason.
+
+Images are resized in the browser to a maximum dimension of 1200px and encoded
+as JPEG before upload. If a vision provider key is configured, the image is
+sent to that provider for OCR; Sente does not save it to an app database.
+Without a configured key, screenshot reading is unavailable and
+paste-to-analyse still works.
+Provider prices and data-handling terms vary, so there is no fixed per-image
+cost. Check the selected provider's current terms and pricing before enabling
+uploads.
+
 ## Run locally
 
 ```bash
@@ -78,11 +102,18 @@ npm run dev
 
 Open http://localhost:3000 and press **Try sample**.
 
-Optional — nicer written explanations:
+Optional — model-written explanations and screenshot OCR:
 
 ```bash
-cp .env.example .env.local   # add OPENAI_API_KEY / XAI_API_KEY / OPENROUTER_API_KEY / GROQ_API_KEY
+cp .env.example .env.local   # add one supported provider key
 ```
+
+The deterministic ledger and fraud checks work without a key. When a key is
+configured, flagged SMS text is sent to that provider for explanations, and
+uploaded images are sent to the configured vision provider for OCR. Avoid
+uploading sensitive messages unless you are comfortable with the provider's
+data-handling terms. `VISION_MODEL` can optionally override the default vision
+model.
 
 ## The sample data reconciles
 
@@ -130,10 +161,10 @@ a balance chain catches the overwhelming majority of what they actually see.
 
 ## Roadmap
 
-- Screenshot upload (vision extraction → same detection pipeline)
 - Airtel Money and bank SMS templates
 - Customer credit book — who owes what
 - Offline PWA so it works on a shop phone with no data
+- Batch import of a full month of screenshots
 
 ## License
 
